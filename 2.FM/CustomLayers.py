@@ -135,10 +135,13 @@ class FMRankingLayer(tf.keras.layers.Layer):
         self.built = True
 
     def call(self, inputs):
-        X=[]
+        X = []
         for feature in self.feature_names:
-            X.append(inputs[feature])
-        X=tf.concat(X,axis=1)
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X.append(feature_tensor)
+        X = tf.concat(X, axis=1)
 
         w_output=self.w(X)
         emb_output=self.embed(X)
@@ -243,7 +246,7 @@ class DeepFMRankingLayer(tf.keras.layers.Layer):
              'item_tag3': tf.constant([8,9,10,11])}
     print(mm.model(input))
     """
-    def __init__(self, feature_names=['user_tag1','user_tag2','item_tag1', 'item_tag2', 'item_tag3'],feature_dims=20, embedding_dims=16,
+    def __init__(self, feature_names=['user_tag0','user_tag1','item_tag1', 'item_tag2', 'item_tag3'],feature_dims=20, embedding_dims=16,
                  mlp_dims=[32,8], **kwargs):
         super(DeepFMRankingLayer, self).__init__(**kwargs)
         self.feature_names=feature_names
@@ -268,10 +271,13 @@ class DeepFMRankingLayer(tf.keras.layers.Layer):
         self.built = True
 
     def call(self, inputs):
-        X=[]
+        X = []
         for feature in self.feature_names:
-            X.append(inputs[feature])
-        X=tf.concat(X,axis=1)
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X.append(feature_tensor)
+        X = tf.concat(X, axis=1)
 
         # common input vectors
         w_output=self.w(X)
@@ -304,7 +310,7 @@ class WideAndDeepRankingLayer(tf.keras.layers.Layer):
              'item_tag3': tf.constant([8,9,10,11])}
     print(mm.model(input))
     """
-    def __init__(self, feature_names=['user_tag1','user_tag2','item_tag1', 'item_tag2', 'item_tag3'],feature_dims=20, embedding_dims=16,
+    def __init__(self, feature_names=['user_tag0','user_tag1','item_tag1', 'item_tag2', 'item_tag3'],feature_dims=20, embedding_dims=16,
                  mlp_dims=[32,8], **kwargs):
         super(WideAndDeepRankingLayer, self).__init__(**kwargs)
         self.feature_names=feature_names
@@ -331,17 +337,18 @@ class WideAndDeepRankingLayer(tf.keras.layers.Layer):
 
     def call(self, inputs):
         # 需要有labelencode以前的原始特征值才行，dataset需要另外处理
-        X=[]
+        X = []
         for feature in self.feature_names:
-            X.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X.append(feature_tensor)
+        X = tf.concat(X, axis=1)
         raw=inputs['raw']
-
-        X=tf.concat(X,axis=1)
 
         # common input vectors
         w_output=self.w(X)
         emb_output=self.embed(X)
-
 
         # DNN Part
         dense_embedding=tf.keras.layers.Flatten()(emb_output)
@@ -353,6 +360,7 @@ class WideAndDeepRankingLayer(tf.keras.layers.Layer):
 
         result={'output':output}
         return result
+
 
 class FFMRankingLayer(tf.keras.layers.Layer):
     """
@@ -381,30 +389,144 @@ class FFMRankingLayer(tf.keras.layers.Layer):
                                                self.embedding_dims,
                                                embeddings_regularizer="l2") for _ in range(self.fields_cnt)]
 
-
         self.built = True
 
     def call(self, inputs):
-        X=[]
+        X = []
         for feature in self.feature_names:
-            X.append(inputs[feature])
-        X=tf.concat(X,axis=1)
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X.append(feature_tensor)
+        X = tf.concat(X, axis=1)
 
         w_output=self.w(X)
 
-        first_order=tf.reduce_sum(w_output,axis=1)+self.bias
+        first_order=tf.reduce_sum(w_output,axis=1)
 
-        ebd_out=[self.embedding_list[i](X) for i in range(self.fields_cnt)]
+        ebd_out=[self.embedding_list[i](X) for i in range(self.fields_cnt)]    # field_cnt*(batch_size,fields_cnt,embedding_dim)
         interactions=[]
         for i in range(self.fields_cnt):
             for j in range(i+1,self.fields_cnt):
                 interactions.append(tf.multiply(ebd_out[i][:,j],ebd_out[j][:,i]))
+                # ebd_out[i][:,j]:第i个lookup_table的X全embedding中，选出第j个field的embedding (i域对j域专用)
+                # 第i个lookup_table:专门用来和域i交互的全域embedding信息
+                # FFM:给每个域单独配置一个全域embedding，专门用于和全域(其它域)交互时提取使用
         interactions=tf.stack(interactions,axis=1)
         second_order=tf.reduce_sum(tf.reduce_sum(interactions,axis=1),axis=1,keepdims=True)
 
         output=tf.nn.sigmoid(self.bias+first_order+second_order)
         result={'output':output}
         return result
+
+
+class FieldAwareInteractionLayer(tf.keras.layers.Layer):
+    # 不使用for循环
+    def __init__(self, fields_cnt, feature_dims=20, embedding_dims=16, **kwargs):
+        super(FieldAwareInteractionLayer,self).__init__(**kwargs)
+        self.embedding_lookup_table = self.add_weight(name='v', shape=(feature_dims, fields_cnt, embedding_dims),
+                                 trainable=True)
+
+    def call(self, X):
+        # X:(batch_size,fields_num)
+        # Field-aware Interaction term
+        embeddings = tf.nn.embedding_lookup(self.embedding_lookup_table, X)  # (batch_size,fields_cnt,fields_cnt,embedding_dim)
+        embeddings_T = tf.transpose(embeddings, [0, 2, 1, 3])
+        interactions = embeddings * embeddings_T  # a域对b域交互时的embedding * b域对a域交互时的embedding
+
+        # 获取interactions的形状
+        shape = tf.shape(interactions)
+        batch_size, num_fields, embedding_dim = shape[0], shape[1], shape[3]
+
+        # 创建一个上三角掩码
+        mask = tf.linalg.band_part(tf.ones((num_fields, num_fields)), 0, -1)
+        mask = mask - tf.linalg.band_part(tf.ones((num_fields, num_fields)), 0, 0)
+        mask = tf.expand_dims(mask, 0)
+        mask = tf.expand_dims(mask, -1)
+        mask = tf.tile(mask, [batch_size, 1, 1, embedding_dim])  # 广播到与interactions相同的形状
+
+        # 将掩码应用于interactions，以保留上三角部分
+        interactions_triangle = tf.multiply(interactions, mask)
+
+        # 使用tf.boolean_mask来提取上三角部分
+        interactions_triangle_flat = tf.boolean_mask(interactions_triangle, mask > 0)
+
+        # 重新整形为所需形状
+        final_shape = (batch_size, num_fields * (num_fields - 1) // 2, embedding_dim)
+        interactions_final = tf.reshape(interactions_triangle_flat, final_shape)
+        return interactions_final
+
+
+class FFMLayer(tf.keras.layers.Layer):
+    # 不使用python for循环逻辑，直接在tf2向量中完成交叉
+    def __init__(self, feature_names=['item_tag1', 'item_tag2', 'item_tag3','user_tag0','user_tag1'], feature_dims=20, embedding_dims=16, **kwargs):
+        super(FFMLayer, self).__init__(**kwargs)
+        self.feature_names = feature_names
+        self.feature_dims = feature_dims
+        self.fields_cnt = len(self.feature_names)
+        self.embedding_dims = embedding_dims
+
+    def build(self, input_shape):
+        self.bias = self.add_weight(name='bias', shape=(1,), trainable=True)
+        self.w = self.add_weight(name='w', shape=(self.feature_dims, 1), trainable=True)
+        self.fa_interaction_layer=FieldAwareInteractionLayer(self.fields_cnt)
+        self.built = True
+
+    def call(self, inputs):
+        X = []
+        for feature in self.feature_names:
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X.append(feature_tensor)
+        X = tf.concat(X, axis=1)
+
+        # Linear term
+        linear_term = tf.reduce_sum(tf.nn.embedding_lookup(self.w, X), axis=1)  # (batch_size,fields_cnt,1)  -> (batch_size,1)
+
+        interaction_vectors=self.fa_interaction_layer(X)
+        interaction_term=tf.reduce_sum(tf.reduce_sum(interaction_vectors,axis=1),axis=1,keepdims=True)
+
+        output = tf.nn.sigmoid(self.bias+linear_term+interaction_term)
+        result = {'output': output}
+        return result
+
+
+class FwFMLayer(tf.keras.layers.Layer):
+    # 不使用python for循环逻辑，直接在tf2向量中完成交叉
+    def __init__(self, feature_names=['item_tag1', 'item_tag2', 'item_tag3','user_tag0','user_tag1'], feature_dims=20, embedding_dims=16, **kwargs):
+        super(FwFMLayer, self).__init__(**kwargs)
+        self.feature_names = feature_names
+        self.feature_dims = feature_dims
+        self.fields_cnt = len(self.feature_names)
+        self.embedding_dims = embedding_dims
+        self.interaction_weights=tf.keras.layers.Dense(1)
+
+    def build(self, input_shape):
+        self.bias = self.add_weight(name='bias', shape=(1,), trainable=True)
+        self.w = self.add_weight(name='w', shape=(self.feature_dims, 1), trainable=True)
+        self.fa_interaction_layer=FieldAwareInteractionLayer(self.fields_cnt)
+        self.built = True
+
+    def call(self, inputs):
+        X = []
+        for feature in self.feature_names:
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X.append(feature_tensor)
+        X = tf.concat(X, axis=1)
+
+        # Linear term
+        linear_term = tf.reduce_sum(tf.nn.embedding_lookup(self.w, X), axis=1)  # (batch_size,fields_cnt,1)  -> (batch_size,1)
+
+        interaction_vectors=self.fa_interaction_layer(X)
+        interaction_term=self.interaction_weights(tf.reduce_sum(interaction_vectors,axis=-1))
+
+        output = tf.nn.sigmoid(self.bias+linear_term+interaction_term)
+        result = {'output': output}
+        return result
+
 
 class PNNRankingLayer(tf.keras.layers.Layer):
     """
@@ -414,7 +536,7 @@ class PNNRankingLayer(tf.keras.layers.Layer):
              'item_tag3': tf.constant([8,9,10,11])}
     print(mm.model(input))
     """
-    def __init__(self, feature_names=['user_tag1','user_tag2','item_tag1', 'item_tag2', 'item_tag3'],feature_dims=20, embedding_dims=16,
+    def __init__(self, feature_names=['user_tag0','user_tag1','item_tag1', 'item_tag2', 'item_tag3'],feature_dims=20, embedding_dims=16,
                  mlp_dims=[32,8],dropout=0, method='inner',kernel_type=None,**kwargs):
         super(PNNRankingLayer, self).__init__(**kwargs)
         assert method in ('inner','outer')
@@ -447,10 +569,13 @@ class PNNRankingLayer(tf.keras.layers.Layer):
         self.built = True
 
     def call(self, inputs):
-        X=[]
+        X = []
         for feature in self.feature_names:
-            X.append(inputs[feature])
-        X=tf.concat(X,axis=1)
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X.append(feature_tensor)
+        X = tf.concat(X, axis=1)
 
         # common input vectors
         emb_output=self.embed(X)            # (batch_size,fields_cnt,embedding_size)
@@ -535,11 +660,8 @@ class OuterProductNetwork(tf.keras.layers.Layer):
                     # row.append(i), col.append(j)
                     products.append(tf.multiply(x[:,i,:],x[:,j,:]))
             stacked_product=tf.stack(products,axis=1)
-            print(stacked_product.shape)
             kerneled_product=tf.multiply(stacked_product,tf.expand_dims(self.kernel,0))
-            print(kerneled_product.shape)
             result = tf.reduce_sum(kerneled_product, axis=2)
-            print(result.shape)
         else:
             p=[]
             q=[]
@@ -552,6 +674,175 @@ class OuterProductNetwork(tf.keras.layers.Layer):
             kp=tf.multiply(tf.expand_dims(p,1),self.kernel)
             kp = tf.transpose(tf.reduce_sum(kp, axis=-1),perm=[0,2,1])
             result=tf.reduce_sum(tf.multiply(kp,q,),axis=-1)
+        return result
+
+
+class PNNLayer(tf.keras.layers.Layer):
+    """
+    新版实现，改成不使用for循环
+    input = {'item_tag1': tf.constant([0, 1, 2, 3]), 'item_tag2': tf.constant([4, 5, 6, 7]),
+             'item_tag3': tf.constant([8, 9, 10, 11]),'user_tag0': tf.constant([12, 13, 14, 15]),
+             'user_tag1': tf.constant([16, 17, 18, 19])}
+    input_dic = {}
+    layer = PNNLayer(embedding_dims=8,method='outer',kernel_type='num')
+    print(layer(input))
+    for feature in layer.feature_names:
+        input_dic[feature] = tf.keras.Input(shape=(1,), name=feature, dtype=tf.int64)
+    output = layer(input_dic)
+    model = tf.keras.Model(input_dic, output)
+    model.summary()
+    print(model(input))
+    """
+    def __init__(self, feature_names=['user_tag0','user_tag1','item_tag1', 'item_tag2', 'item_tag3'],feature_dims=20, embedding_dims=16,
+                 mlp_dims=[32,8],dropout=0, method='inner',kernel_type=None,**kwargs):
+        super(PNNLayer, self).__init__(**kwargs)
+        assert method in ('inner','outer')
+        self.feature_names=feature_names
+        self.feature_dims=feature_dims
+        self.fields_cnt=len(self.feature_names)
+        self.embedding_dims = embedding_dims
+        self.mlp_dims=mlp_dims
+        self.method=method
+        self.dropout=dropout
+        self.kernel_type=kernel_type
+
+    def build(self, input_shape):
+        # bias
+        if self.method=='inner':
+            self.pn=IpnLayer()
+        elif self.method=='outer':
+            self.pn=OpnLayer(self.fields_cnt,self.embedding_dims,self.kernel_type)
+
+        # embedding and w
+        self.embed = tf.keras.layers.Embedding(self.feature_dims,
+                                               self.embedding_dims,
+                                               embeddings_regularizer="l2")
+
+        self.MLP_layer1=MLPLayer(units=self.mlp_dims, activation='relu',is_dropput=self.dropout)
+        self.MLP_layer2=MLPLayer(units=[1], activation='sigmoid')
+        self.built = True
+
+    def call(self, inputs):
+        X = []
+        for feature in self.feature_names:
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X.append(feature_tensor)
+        X = tf.concat(X, axis=1)
+
+        # common input vectors
+        emb_output=self.embed(X)            # (batch_size,fields_cnt,embedding_size)
+
+        product_output=self.pn(emb_output)  # (batch_size,fields_cnt*(fields_cnt- 1) // 2)
+        dense_embedding=tf.keras.layers.Flatten()(emb_output) # (batch_size,fields_cnt*embedding_dims)
+
+        combined_vector=tf.concat([dense_embedding,product_output],axis=1) # (batch_size,fields_cnt*embedding_dims+fields_cnt*(fields_cnt- 1) // 2)
+
+        # output
+        # 原论文的FM part没有接入全连接层，而是直接以系数1加入结果，这里也通过全连接层学习系数k
+        output = self.MLP_layer1(combined_vector)
+        output = self.MLP_layer2(output)
+
+        result={'output':output}
+        return result
+
+def SharedFieldsInteraction(x):
+    shape=tf.shape(x)
+    batch_size = shape[0]
+    num_fields = shape[1]
+    embedding_dim = shape[2]
+    x1 = tf.expand_dims(x, axis=1)
+    x2 = tf.expand_dims(x, axis=2)
+    interactions = tf.multiply(x1, x2)  # (batch_size,num_fields,num_fields,embedding_dim)
+    ##### 对角处理逻辑开始,适合于域交叉剔重和排除自己交叉   input: num_fields   interactions (batch_size,num_fields,num_fields,embedding_dim)
+    mask = tf.linalg.band_part(tf.ones((num_fields, num_fields)), 0, -1) - tf.linalg.band_part(
+        tf.ones((num_fields, num_fields)), 0, 0)
+    mask = tf.expand_dims(tf.expand_dims(mask, 0), -1)
+    mask = tf.tile(mask, [batch_size, 1, 1, embedding_dim])  # 广播到与interactions相同的形状
+    interactions_triangle = tf.multiply(interactions, mask)
+    interactions_triangle_flat = tf.boolean_mask(interactions_triangle, mask > 0)
+    final_shape = (batch_size, num_fields * (num_fields - 1) // 2, embedding_dim)
+    interaction_final = tf.reshape(interactions_triangle_flat, final_shape)
+    return interaction_final
+
+
+class IpnLayer(tf.keras.layers.Layer):
+    """
+    不使用for循环
+    input=tf.random.normal(3,6,8)
+    layer=IpnLayer()
+    print(layer(input))
+    """
+    def __init__(self,**kwargs):
+        super(IpnLayer, self).__init__(**kwargs)
+
+    def build(self,input_shape):
+        self.built=True
+
+    def call(self, x):
+        # 交叉完成后，不合并域，而是将embedding维累加
+        interaction_final=SharedFieldsInteraction(x)
+        result = tf.reduce_sum(interaction_final, axis=2)
+        return result
+
+
+class OpnLayer(tf.keras.layers.Layer):
+    """
+    opn=OuterProductNetwork(6,8,'mat')
+    input=tf.constant(np.arange(24).reshape(2,3,4),dtype=float)
+    print(input)
+    print(opn(input))
+    """
+    def __init__(self, fields_cnt, embedding_dims, kernel_type=None,**kwargs):
+        super(OpnLayer,self).__init__(**kwargs)
+        if not kernel_type:
+            kernel_type='mat'
+        assert kernel_type in ('mat','vec','num')
+        product_rows_num = fields_cnt * (fields_cnt - 1) // 2
+        if kernel_type == 'mat':
+            self.kernel_shape = embedding_dims, product_rows_num, embedding_dims
+        elif kernel_type == 'vec':
+            self.kernel_shape = product_rows_num, embedding_dims
+        elif kernel_type == 'num':
+            self.kernel_shape = product_rows_num, 1
+
+        self.kernel_type = kernel_type
+
+
+    def build(self, input_shape):
+        super(OpnLayer,self).build(input_shape)
+        self.kernel = self.add_weight(name='kernel',
+                                      shape=(self.kernel_shape),
+                                      initializer=initializers.get('random_normal'),
+                                      trainable=True)
+        self.built = True
+
+    def call(self, x):
+        num_fields=x.shape[1]
+        if self.kernel_type!='mat':
+            stacked_product=SharedFieldsInteraction(x)
+            kerneled_product=tf.multiply(stacked_product,tf.expand_dims(self.kernel,0))
+            result = tf.reduce_sum(kerneled_product, axis=2)
+        else:
+            i, j = tf.meshgrid(tf.range(num_fields), tf.range(num_fields), indexing='ij')
+            mask_upper_triangle = tf.cast(i < j, tf.int32)
+            p = tf.boolean_mask(i, mask_upper_triangle)
+            q = tf.boolean_mask(j, mask_upper_triangle)
+
+            batch_size = tf.shape(x)[0]
+            batch_indices = tf.reshape(tf.range(batch_size), (batch_size, 1))
+            batch_indices = tf.tile(batch_indices, [1, self.kernel_shape[1]])  # product_rows_num
+            indices_p = tf.stack([batch_indices, tf.broadcast_to(p, tf.shape(batch_indices))], axis=-1)
+            indices_q = tf.stack([batch_indices, tf.broadcast_to(q, tf.shape(batch_indices))], axis=-1)
+            X_p = tf.gather_nd(x, indices_p)
+            X_q = tf.gather_nd(x, indices_q)
+            # kernel :(embedding_dims, product_rows_num, embedding_dims)
+            # (batch_size,1,product_rows_num,embedding_dim)*(embedding_dims,product_rows_num,embedding_dim)
+            # ->(batch_size,product_rows_num,embedding_dim)*相同形状->相同形状
+            kp=tf.multiply(tf.expand_dims(X_p,1),self.kernel)
+            kp = tf.transpose(tf.reduce_sum(kp, axis=-1),perm=[0,2,1])
+            result=tf.reduce_sum(tf.multiply(kp,X_q,),axis=-1)
         return result
 
 
@@ -616,6 +907,7 @@ class ONNLayer(tf.keras.layers.Layer):
                                                         self.embedding_dims,
                                                         embeddings_regularizer="l2")
         self.embedding_pair_dict = {}
+        # 这种写法适合每个特征的各种取值从0开始独立编码，否则使用公共编码Embedding的参数使用率很低
         for i in range(self.fields_cnt):
             for j in range(i +1, self.fields_cnt):
                 self.embedding_pair_dict[(i,j)]=(tf.keras.layers.Embedding(self.feature_dims,
@@ -625,9 +917,6 @@ class ONNLayer(tf.keras.layers.Layer):
                                                                            self.embedding_dims,
                                                                            embeddings_regularizer="l2")
                                                  )
-        [tf.keras.layers.Embedding(self.feature_dims,
-                                                         self.embedding_dims,
-                                                         embeddings_regularizer="l2") for _ in range(self.fields_cnt)]
 
         self.mlp_layer=make_mlp_layer(mlp_units,sigmoid_units=True)
 
@@ -660,12 +949,78 @@ class ONNLayer(tf.keras.layers.Layer):
         return result
 
 
-
-if __name__ == '__main__':
+class ParralledOnnLayer(tf.keras.layers.Layer):
+    """
+    不使用for循环
     input = {'item_tag1': tf.constant([0, 1, 2, 3]), 'item_tag2': tf.constant([4, 5, 6, 7]),
              'item_tag3': tf.constant([8, 9, 10, 11]),'user_tag0': tf.constant([12, 13, 14, 15])}
     input_dic = {}
-    layer = ONNLayer(embedding_dims=8,reduce=False)
+    layer = ParralledOnnLayer(embedding_dims=8)
+    for feature in layer.feature_names:
+        input_dic[feature] = tf.keras.Input(shape=(1,), name=feature, dtype=tf.int64)
+    output = layer(input_dic)
+    model = tf.keras.Model(input_dic, output)
+    model.summary()
+    print(model(input))
+    """
+    def __init__(self, feature_names=['item_tag1', 'item_tag2', 'item_tag3','user_tag0'],feature_dims=20, embedding_dims=16,mlp_units=[40,20],reduce=False, **kwargs):
+        super(ParralledOnnLayer, self).__init__(**kwargs)
+        self.feature_names=feature_names
+        self.feature_dims=feature_dims
+        self.fields_cnt=len(self.feature_names)
+        self.embedding_dims = embedding_dims
+
+        self.embedding_single=tf.keras.layers.Embedding(self.feature_dims,
+                                                        self.embedding_dims,
+                                                        embeddings_regularizer="l2")
+
+        self.fa_interaction_layer = FieldAwareInteractionLayer(self.fields_cnt)
+
+        self.mlp_layer=make_mlp_layer(mlp_units,sigmoid_units=True)
+
+        self.reduce=reduce
+
+
+    def call(self, inputs):
+        X=[]
+        for feature in self.feature_names:
+            X.append(inputs[feature])
+        X=tf.concat(X,axis=1)
+        X_single=tf.keras.layers.Flatten()(self.embedding_single(X))
+
+        X_pair=self.fa_interaction_layer(X)
+        if self.reduce:
+            X_pair=tf.reduce_sum(X_pair,axis=2)
+        X_pair = tf.keras.layers.Flatten()(X_pair)
+
+        X_combined=tf.concat([X_single,X_pair],axis=1)
+
+        output=self.mlp_layer(X_combined)
+
+        result={'output':output}
+        return result
+
+
+
+if __name__ == '__main__':
+    """
+    input = {'item_tag1': tf.constant([0, 1, 2, 3]), 'item_tag2': tf.constant([4, 5, 6, 7]),
+             'item_tag3': tf.constant([8, 9, 10, 11]),'user_tag0': tf.constant([12, 13, 14, 15]),
+             'user_tag1': tf.constant([16, 17, 18, 19])}
+    input_dic = {}
+    layer = PNNLayer(embedding_dims=8,method='outer',kernel_type='num')
+    print(layer(input))
+    for feature in layer.feature_names:
+        input_dic[feature] = tf.keras.Input(shape=(1,), name=feature, dtype=tf.int64)
+    output = layer(input_dic)
+    model = tf.keras.Model(input_dic, output)
+    model.summary()
+    print(model(input))
+    """
+    input = {'item_tag1': tf.constant([0, 1, 2, 3]), 'item_tag2': tf.constant([4, 5, 6, 7]),
+             'item_tag3': tf.constant([8, 9, 10, 11]), 'user_tag0': tf.constant([12, 13, 14, 15])}
+    input_dic = {}
+    layer = ParralledOnnLayer(embedding_dims=8)
     for feature in layer.feature_names:
         input_dic[feature] = tf.keras.Input(shape=(1,), name=feature, dtype=tf.int64)
     output = layer(input_dic)

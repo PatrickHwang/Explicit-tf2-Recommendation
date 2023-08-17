@@ -8,40 +8,41 @@
 (5) DeepFM  
 (6) WideAndDeep  
 (7) FFM  
-(8) PNN     inner&outer  
-(9) ONN  
+(8) FwFM
+(9) PNN     inner&outer  
+(10) ONN  
 
 # 3.DCN
-(10) DCN     vector&matrix  
-(11) XDeepFM  
-(12) NFM  
-(13) DeepCrossing  
-(14) FNN  
-(15) CCPM  
-(16) FGCNN  
-(17) AFM  
+(11) DCN     vector&matrix  
+(12) XDeepFM  
+(13) NFM  
+(14) DeepCrossing  
+(15) FNN  
+(16) CCPM  
+(17) FGCNN  
+(18) AFM  
 
 # 4.MMOE
-(18) MMOE  
-(19) ESMM  
-(20) PLE  
+(19) MMOE  
+(20) ESMM  
+(21) PLE  
 
 # 5.DIN
-(21) DIN  
-(22) DIEN  
-(23) DSIN
+(22) DIN  
+(23) DIEN  
+(24) DSIN
 
 # 6.MIND
-(24) MIND  
-(25) SDM  
-(26) ComiRec  
+(25) MIND  
+(26) SDM  
+(27) ComiRec  
 
 # 7.SIM
-(27) SIM  
-(28) CAN   
-(29) ETA    
+(28) SIM  
+(29) CAN   
+(30) ETA    
 
 # 8.DMR
-(30) DMR  
-(31) DMT  
-(32) FinalMLP  
+(31) DMR  
+(32) DMT  
+(33) FinalMLP  

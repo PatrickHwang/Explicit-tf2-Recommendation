@@ -356,6 +356,7 @@ class FinalMLPLayer(tf.keras.layers.Layer):
 
         self.interaction_layer=DualPartsInteractionLayer(num_heads,output_dim)
 
+
     def call(self, inputs):
         X_user = []
         for feature in self.user_features:
