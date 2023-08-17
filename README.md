@@ -8,7 +8,7 @@
 (5) DeepFM  
 (6) WideAndDeep  
 (7) FFM  
-(8) FwFM
+(8) FwFM  
 (9) PNN     inner&outer  
 (10) ONN  
 
@@ -46,3 +46,8 @@
 (31) DMR  
 (32) DMT  
 (33) FinalMLP  
+
+# 9.SDIM
+(34) SDIM  
+(35) SINE  
+(36) UBR4CTR  

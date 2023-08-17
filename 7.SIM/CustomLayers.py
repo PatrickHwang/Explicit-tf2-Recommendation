@@ -556,9 +556,7 @@ class ETALayer(tf.keras.layers.Layer):
     def generate_longterm_interest(self,item_embedding,longterm_series_embedding,longterm_mask):
         # 这里没有实现工程上把一个用户的所有候选物品放到一个batch，这时，longterm_series_embedding在batch内是相同的
         # series_codes=tf.sign(tf.einsum('le,em->lm',longterm_series_embedding,self.H))
-        # item_codes=tf.sign(tf.einsum('be,em->bm'))
-        # scale_product=tf.einsum('lm,bm->lbm')
-        # scores=tf.reduce_sum((scale_product>1),axis=-1)
+        # item_codes=tf.sign(tf.einsum('be,em->bm',item_embedding,self.H))
         series_codes=tf.sign(tf.einsum('ble,em->blm',longterm_series_embedding,self.H))
         item_codes=tf.tile(tf.sign(tf.einsum('ble,em->blm',item_embedding,self.H)),[1,tf.shape(series_codes)[1],1])
         equalities = tf.cast(series_codes == item_codes, tf.float32)
@@ -574,7 +572,7 @@ class ETALayer(tf.keras.layers.Layer):
 
         sequence_lengths = tf.reduce_sum(tf.cast(~top_longterm_mask, tf.int32), axis=1)
 
-        # 创建一个掩码矩阵，大小为最大长度*最大长度
+        # 创建一个掩码矩阵，大小为batch_size*最大长度
         mask_matrix = tf.sequence_mask(sequence_lengths, top_longterm_mask.shape[1], dtype=tf.float32)
         attention_mask = tf.expand_dims(mask_matrix, 1)  # expand one dimension
         longterm_interest = self.longterm_mha(
