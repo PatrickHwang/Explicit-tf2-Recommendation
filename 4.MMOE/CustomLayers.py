@@ -291,6 +291,7 @@ class ESMMLayer(tf.keras.layers.Layer):
         result={'ctr_output':ctr_output,'cvr_output':ctcvr_output}
         return result
 
+
 class PLELayer(tf.keras.layers.Layer):
     """
         mm = ModelManager(layer='ple_layer',allow_continuous=True)
@@ -314,7 +315,7 @@ class PLELayer(tf.keras.layers.Layer):
         self.categorical_features = categorical_features
         self.continuous_features = continuous_features
         self.embedding_layer = tf.keras.layers.Embedding(feature_dims, embedding_dims)
-        self.num_tasks=2    # ctr+ctcvr
+        self.num_tasks=3    # ctr+ctcvr
         self.specific_expert_num=specific_expert_num
         self.shared_expert_num=shared_expert_num
         self.level_num=level_num
@@ -365,7 +366,7 @@ class PLELayer(tf.keras.layers.Layer):
         outputs=[]
         specific_expert_networks=self.specific_expert_networks[level_num]
         shared_expert_networks=self.shared_expert_networks[level_num]
-        specific_gates=self.specific_gates[level_num][0]
+        specific_gates=self.specific_gates[level_num]
 
         specific_expert_outputs=[]
         for i in range(self.num_tasks):
@@ -382,8 +383,8 @@ class PLELayer(tf.keras.layers.Layer):
         for task_index in range(self.num_tasks):
             cur_experts=specific_expert_outputs[task_index * self.specific_expert_num:(task_index + 1) * self.specific_expert_num] + shared_expert_outputs
             expert_concat = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=1))(cur_experts)
-            gate_output=specific_gates[0](inputs[task_index])
-            gate_output = specific_gates[1](gate_output)
+            gate_output=specific_gates[task_index][0](inputs[task_index])
+            gate_output = specific_gates[task_index][1](gate_output)
             gate_output = tf.keras.layers.Lambda(lambda x: tf.expand_dims(x, axis=-1))(gate_output)
             gate_mul_expert = tf.keras.layers.Lambda(lambda x: reduce_sum(x[0] * x[1], axis=1, keep_dims=False),
                                                      name=str(level_num) + '_gate_mul_expert_specific_' + str(task_index))([expert_concat, gate_output])
@@ -402,12 +403,13 @@ class PLELayer(tf.keras.layers.Layer):
 
         return outputs
 
-
-
     def call(self, inputs):
         X_cate = []
         for feature in self.categorical_features:
-            X_cate.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X_cate.append(feature_tensor)
         X_cate = tf.concat(X_cate, axis=1)
 
         emb_output = self.embedding_layer(X_cate)
@@ -420,12 +422,12 @@ class PLELayer(tf.keras.layers.Layer):
         ple_outputs = self.call_cgc_net(ple_inputs, self.level_num-1, True)
 
         # 顶层输出
-        ctr_output=self.tower_outputs[0](ple_outputs[0])
-        cvr_output = self.tower_outputs[1](ple_outputs[1])
+        result = {}
+        for i in range(self.num_tasks):
+            output = self.tower_outputs[i](ple_outputs[i])
+            result[f"task_{i}"] = output
 
-        result={'ctr_output':ctr_output,'cvr_output':cvr_output}
         return result
-
 
 
 if __name__ == '__main__':
