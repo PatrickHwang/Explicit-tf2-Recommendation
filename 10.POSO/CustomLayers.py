@@ -102,12 +102,14 @@ class PosoForMLPLayer(tf.keras.layers.Layer):
         self.gates=[GateNULayer(gate_hidden_multiple*unit,unit) for unit in units]
         self.layer_depth=len(units)
         self.norm=norm
+        self.C_list=[tf.Variable(initial_value=1.0, trainable=True, dtype=tf.float32) for _ in range(len(units))]
 
     def call(self, inputs_for_main,inputs_for_gate, *args, **kwargs):
         for i in range(self.layer_depth):
             dense_output=self.dense_layers[i](inputs_for_main)
             gate_output=self.gates[i](inputs_for_gate)
             layer_output=tf.multiply(dense_output,gate_output)
+            layer_output=self.C_list[i]*layer_output
             if self.norm:
                 if self.norm=='batchnorm':
                     layer_output=tf.keras.layers.BatchNormalization()(layer_output)
@@ -183,6 +185,8 @@ class PosoForMHALayer(tf.keras.layers.Layer):
         self.gate_for_k=GateNULayer(gate_k_hidden_unit,output_unit=d_model)
         self.gate_for_v=GateNULayer(gate_v_hidden_unit,output_unit=n_v)
 
+        self.C = tf.Variable(initial_value=1.0, trainable=True, dtype=tf.float32)
+
     def split_heads(self,input):
         batch_size=tf.shape(input)[0]
         sequence_length=tf.shape(input)[1]
@@ -210,6 +214,7 @@ class PosoForMHALayer(tf.keras.layers.Layer):
             attention+=mask*(-1e9)
         attention=tf.nn.softmax(attention,axis=-1)
         output=tf.matmul(attention,v)
+        output = self.C * output
         output=tf.transpose(output,[0,2,1,3])
         output=tf.reshape(output,[tf.shape(output)[0],tf.shape(output)[1],-1])
         output=self.wo(output)
@@ -281,6 +286,8 @@ class PosoForMMOELayer(tf.keras.layers.Layer):
         self.ctr_output=make_mlp_layer(units=output_units,activation=output_activation,sigmoid_units=True)
         self.cvr_output=make_mlp_layer(units=output_units,activation=output_activation,sigmoid_units=True)
 
+        self.C = tf.Variable(initial_value=1.0, trainable=True, dtype=tf.float32)
+
     def generate_expert_output(self,inputs):
         X_cate = []
         for feature in self.categorical_features:
@@ -318,10 +325,12 @@ class PosoForMMOELayer(tf.keras.layers.Layer):
             gate=self.cvr_gate
             output=self.cvr_output
         gate = gate(X_combined)
+        gate=tf.nn.softmax(gate,axis=-1)
         gate = tf.expand_dims(gate, axis=2)
         input = tf.multiply(expert_outputs, gate)
         input = tf.keras.layers.Flatten()(input)
         output = output(input)
+        output = self.C*output
         return output
 
     def generate_poso_gate_output(self,inputs):
@@ -360,6 +369,30 @@ class PosoForMMOELayer(tf.keras.layers.Layer):
 
 
 class PEPNetLayer(tf.keras.layers.Layer):
+    """
+    inputs = {'sdk_type': tf.constant([0, 1, 2]), 'remote_host': tf.constant([3, 4, 5]),
+              'device_type': tf.constant([6, 7, 8]), 'dtu': tf.constant([9, 10, 11]),
+              'click_goods_num': tf.constant([12, 13, 14]), 'buy_click_num': tf.constant([15, 16, 17]),
+              'goods_show_num': tf.constant([18, 19, 20]), 'goods_click_num': tf.constant([21, 22, 23]),
+              'brand_name': tf.constant([24, 25, 26]),
+              'ppnet_cate1': tf.constant([27, 28, 29]),
+              'ppnet_cate2': tf.constant([30, 31, 32]),
+              'epnet_cate1': tf.constant([33, 34, 35]),
+              'epnet_cate2': tf.constant([36, 37, 38])}
+    layer = PEPNetLayer()
+    set_custom_initialization(layer)
+    print(layer(inputs))
+    print('****************')
+    input_dict = {}
+    max_length = 10
+    neg_samples = 6
+    for feature in layer.categorical_features + layer.ppnet_input_features+layer.epnet_input_features:
+        input_dict[feature] = tf.keras.Input(shape=(1,), name=feature, dtype=tf.int64)
+    output = layer(input_dict)
+    model = tf.keras.Model(input_dict, output)
+    model.summary()
+    print(model(inputs))
+    """
     def __init__(self,
                  categorical_features=['sdk_type', 'remote_host', 'device_type', 'dtu',
                                        'click_goods_num', 'buy_click_num', 'goods_show_num', 'goods_click_num',
@@ -446,7 +479,7 @@ if __name__ == '__main__':
     input_dict = {}
     max_length = 10
     neg_samples = 6
-    for feature in layer.categorical_features + layer.ppnet_input_features+layer.epnet_input_features:
+    for feature in layer.categorical_features + layer.ppnet_input_features + layer.epnet_input_features:
         input_dict[feature] = tf.keras.Input(shape=(1,), name=feature, dtype=tf.int64)
     output = layer(input_dict)
     model = tf.keras.Model(input_dict, output)

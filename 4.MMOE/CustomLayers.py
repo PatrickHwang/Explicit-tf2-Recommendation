@@ -104,57 +104,6 @@ class MLPLayer(tf.keras.layers.Layer):
         return _input
 
 
-class FMRankingLayer(tf.keras.layers.Layer):
-    def __init__(self, feature_names=['item_tag1', 'item_tag2', 'item_tag3'], feature_dims=20, embedding_dims=16,
-                 **kwargs):
-        super(FMRankingLayer, self).__init__(**kwargs)
-        self.feature_names = feature_names
-        self.feature_dims = feature_dims
-        self.embedding_dims = embedding_dims
-        self.bias = self.add_weight(name='bias',
-                                    shape=(1,),
-                                    trainable=True)
-        # embedding and w
-        self.embed = tf.keras.layers.Embedding(self.feature_dims,
-                                               self.embedding_dims,
-                                               embeddings_regularizer="l2")
-        self.w = tf.keras.layers.Embedding(self.feature_dims,
-                                           1,
-                                           embeddings_regularizer="l2")
-
-    def build(self, input_shape):
-        # bias
-        self.bias = self.add_weight(name='bias',
-                                    shape=(1,),
-                                    trainable=True)
-        # embedding and w
-        self.embed = tf.keras.layers.Embedding(self.feature_dims,
-                                               self.embedding_dims,
-                                               embeddings_regularizer="l2")
-        self.w = tf.keras.layers.Embedding(self.feature_dims,
-                                           1,
-                                           embeddings_regularizer="l2")
-        self.built = True
-
-    def call(self, inputs):
-        X = []
-        for feature in self.feature_names:
-            X.append(inputs[feature])
-        X = tf.concat(X, axis=1)
-
-        w_output = self.w(X)
-        emb_output = self.embed(X)
-
-        first_order = tf.reduce_sum(w_output, axis=1)
-
-        sum_of_square = tf.reduce_sum(tf.square(emb_output), axis=1)
-        square_of_sum = tf.square(tf.reduce_sum(emb_output, axis=1))
-        second_order = 0.5 * tf.reduce_sum(tf.subtract(square_of_sum, sum_of_square), axis=1, keepdims=True)
-
-        output = tf.nn.sigmoid(self.bias + first_order + second_order)
-        result = {'output': output}
-        return result
-
 class MMOELayer(tf.keras.layers.Layer):
     """
         mm = ModelManager(layer='mmoe_layer',allow_continuous=True)
@@ -206,7 +155,9 @@ class MMOELayer(tf.keras.layers.Layer):
             expert_outputs.append(expert_output)
 
         ctr_gate=self.ctr_gate(emb_output)
+        ctr_gate=tf.nn.softmax(ctr_gate,axis=-1)
         cvr_gate=self.cvr_gate(emb_output)
+        cvr_gate=tf.nn.softmax(cvr_gate,axis=-1)
 
         expert_outputs=tf.stack(expert_outputs,axis=1)  #(batch,expert_num,8)
         ctr_gate=tf.expand_dims(ctr_gate,axis=2)        #(batch,expert_num,1)
@@ -273,7 +224,9 @@ class ESMMLayer(tf.keras.layers.Layer):
             expert_outputs.append(expert_output)
 
         ctr_gate=self.ctr_gate(emb_output)
+        ctr_gate=tf.nn.softmax(ctr_gate,axis=-1)
         cvr_gate=self.cvr_gate(emb_output)
+        cvr_gate=tf.nn.softmax(cvr_gate,axis=-1)
 
         expert_outputs=tf.stack(expert_outputs,axis=1)  #(batch,expert_num,8)
         ctr_gate = tf.nn.softmax(ctr_gate, axis=1)
@@ -385,6 +338,7 @@ class PLELayer(tf.keras.layers.Layer):
             expert_concat = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=1))(cur_experts)
             gate_output=specific_gates[task_index][0](inputs[task_index])
             gate_output = specific_gates[task_index][1](gate_output)
+            gate_output=tf.nn.softmax(gate_output,axis=-1)
             gate_output = tf.keras.layers.Lambda(lambda x: tf.expand_dims(x, axis=-1))(gate_output)
             gate_mul_expert = tf.keras.layers.Lambda(lambda x: reduce_sum(x[0] * x[1], axis=1, keep_dims=False),
                                                      name=str(level_num) + '_gate_mul_expert_specific_' + str(task_index))([expert_concat, gate_output])

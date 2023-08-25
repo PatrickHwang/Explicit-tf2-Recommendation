@@ -55,6 +55,6 @@
 
 # 10.POSO
 (38) POSO  for MLP/MHA/MMOE  
-(39) PPNet  
+(39) PEPNet  
 
 

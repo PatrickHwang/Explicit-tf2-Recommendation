@@ -156,6 +156,7 @@ class MMOELayer(tf.keras.layers.Layer):
             gate=self.cvr_gate
             output=self.cvr_output
         gate = gate(X_combined)
+        gate = tf.nn.softmax(gate,axis=-1)
         gate = tf.expand_dims(gate, axis=2)
         input = tf.multiply(expert_outputs, gate)
         input = tf.keras.layers.Flatten()(input)
@@ -390,6 +391,7 @@ class PLELayer(tf.keras.layers.Layer):
             cur_experts=specific_expert_outputs[task_index * self.specific_expert_num:(task_index + 1) * self.specific_expert_num] + shared_expert_outputs
             expert_concat = tf.stack(cur_experts, axis=1)  # (batch_size,expert_num,expert_dim)
             gate_output=specific_gates[task_index](inputs[task_index])
+            gate_output=tf.nn.softmax(gate_output,axis=-1)
             gate_output = tf.expand_dims(gate_output, axis=-1)
             gate_mul_expert = tf.reduce_sum(tf.multiply(expert_concat,gate_output),axis=1) # (batch_size,expert_dim)
             outputs.append(gate_mul_expert)
@@ -716,7 +718,7 @@ class FDN4PLELayer(PLELayer):
     inputs.update({'label_0': tf.constant([1, 1, 1, 1, 0, 0]),
                    'label_1': tf.constant([1, 0, 1, 0, 0, 0]),
                    })
-    layer = FCN4PLELayer()
+    layer = FDN4PLELayer()
     set_custom_initialization(layer)
     print(layer(inputs))
     print('****************')
@@ -779,6 +781,7 @@ class FDN4PLELayer(PLELayer):
             cur_experts=specific_expert_outputs[task_index * self.specific_expert_num:(task_index + 1) * self.specific_expert_num] + shared_expert_outputs
             expert_concat = tf.stack(cur_experts, axis=1)  # (batch_size,expert_num,expert_dim)
             gate_output=specific_gates[task_index](inputs[task_index])
+            gate_output=tf.nn.softmax(gate_output,axis=-1)
             gate_output = tf.expand_dims(gate_output, axis=-1)
             gate_mul_expert = tf.reduce_sum(tf.multiply(expert_concat,gate_output),axis=1) # (batch_size,expert_dim)
             outputs.append(gate_mul_expert)
@@ -860,27 +863,24 @@ class FDN4PLELayer(PLELayer):
 
 
 if __name__ == '__main__':
-    inputs = {'sdk_type': tf.constant([0, 1, 2, 3, 4, 5]), 'remote_host': tf.constant([3, 4, 5, 6, 7, 8]),
-              'device_type': tf.constant([9, 10, 11, 12, 13, 14]), 'dtu': tf.constant([15, 16, 17, 18, 19, 20]),
-              'click_goods_num': tf.constant([21, 22, 23, 24, 25, 26]),
-              'buy_click_num': tf.constant([27, 28, 29, 30, 31, 32]),
-              'goods_show_num': tf.constant([33, 34, 35, 36, 37, 38]),
-              'goods_click_num': tf.constant([39, 40, 41, 42, 43, 44]),
-              'brand_name': tf.constant([45, 46, 47, 48, 49, 50]),
-              'click_goods_num_origin': tf.constant([0.2, 7.8, 4.9, 1.8, 1.9, 2.3]),
-              'click_goods_num_square': tf.constant([5.3, 1.2, 8.0, 7.8, -0.2, 4.2]),
-              'click_goods_num_cube': tf.constant([-3.8, -19.6, 4.2, 9.7, 0.2, -7.3])}
-    inputs.update({'label_ctr': tf.constant([1, 1, 1, 1, 0, 0]),
-                   'label_ctcvr': tf.constant([1, 0, 1, 0, 0, 0]),
-                   })
-    layer = ESCM2Layer(counterfactual_mode='IPS')
+    inputs = {'sdk_type': tf.constant([0, 1, 2]), 'remote_host': tf.constant([3, 4, 5]),
+              'device_type': tf.constant([6, 7, 8]), 'dtu': tf.constant([9, 10, 11]),
+              'click_goods_num': tf.constant([12, 13, 14]), 'buy_click_num': tf.constant([15, 16, 17]),
+              'goods_show_num': tf.constant([18, 19, 20]), 'goods_click_num': tf.constant([21, 22, 23]),
+              'brand_name': tf.constant([24, 25, 26]),
+              'click_goods_num_origin': tf.constant([0.2, 7.8, 4.9]),
+              'click_goods_num_square': tf.constant([5.3, 1.2, 8.0]),
+              'click_goods_num_cube': tf.constant([-3.8, -19.6, 4.2])}
+    layer = PLELayer()
     set_custom_initialization(layer)
     print(layer(inputs))
     print('****************')
     input_dict = {}
-    for feature in layer.base_model.categorical_features:
+    max_length = 10
+    neg_samples = 6
+    for feature in layer.categorical_features:
         input_dict[feature] = tf.keras.Input(shape=(1,), name=feature, dtype=tf.int64)
-    for feature in layer.base_model.continuous_features + [layer.ctr_label_name, layer.ctcvr_label_name]:
+    for feature in layer.continuous_features:
         input_dict[feature] = tf.keras.Input(shape=(1,), name=feature, dtype=tf.float32)
     output = layer(input_dict)
     model = tf.keras.Model(input_dict, output)
