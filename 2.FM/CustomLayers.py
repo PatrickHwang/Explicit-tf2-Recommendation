@@ -240,11 +240,17 @@ class DSSMTwoTowerRetrievalLayer(tf.keras.layers.Layer):
 
 class DeepFMRankingLayer(tf.keras.layers.Layer):
     """
-    mm = ModelManager(layer='deepfm_ranking_layer')
-    input = {'user_tag1':tf.constant([12,13,14,15]),'user_tag2':tf.constant([16,17,18,19]),
-             'item_tag1': tf.constant([0, 1, 2,3]), 'item_tag2': tf.constant([4, 5, 6,7]),
-             'item_tag3': tf.constant([8,9,10,11])}
-    print(mm.model(input))
+    input = {'user_tag0': tf.constant([12, 13, 14, 15]), 'user_tag1': tf.constant([16, 17, 18, 19]),
+             'item_tag1': tf.constant([0, 1, 2, 3]), 'item_tag2': tf.constant([4, 5, 6, 7]),
+             'item_tag3': tf.constant([8, 9, 10, 11])}
+    input_dic = {}
+    layer = DeepFMRankingLayer(embedding_dims=8)
+    for feature in layer.feature_names:
+        input_dic[feature] = tf.keras.Input(shape=(1,), name=feature, dtype=tf.int64)
+    output = layer(input_dic)
+    model = tf.keras.Model(input_dic, output)
+    model.summary()
+    print(model(input))
     """
     def __init__(self, feature_names=['user_tag0','user_tag1','item_tag1', 'item_tag2', 'item_tag3'],feature_dims=20, embedding_dims=16,
                  mlp_dims=[32,8], **kwargs):
@@ -267,7 +273,7 @@ class DeepFMRankingLayer(tf.keras.layers.Layer):
                                            1,
                                            embeddings_regularizer="l2")
         self.MLP_layer1=MLPLayer(units=self.mlp_dims, activation='relu')
-        self.MLP_layer2=MLPLayer(units=[1], activation='sigmoid')
+        self.MLP_layer2=MLPLayer(units=[1])
         self.built = True
 
     def call(self, inputs):
@@ -288,16 +294,15 @@ class DeepFMRankingLayer(tf.keras.layers.Layer):
         sum_of_square=tf.reduce_sum(tf.square(emb_output),axis=1)
         square_of_sum=tf.square(tf.reduce_sum(emb_output,axis=1))
         second_order=0.5*tf.reduce_sum(tf.subtract(square_of_sum,sum_of_square),axis=1,keepdims=True)
-        fm_vector=tf.concat([first_order,second_order],axis=1)
+        fm_part =first_order+second_order
 
         # DNN Part
         dense_embedding=tf.keras.layers.Flatten()(emb_output)
-        dnn_vector=self.MLP_layer1(dense_embedding)
+        dnn_part=self.MLP_layer2(self.MLP_layer1(dense_embedding))
 
         # output
         # 原论文的FM part没有接入全连接层，而是直接以系数1加入结果，这里也通过全连接层学习系数k
-        combined_vector=tf.concat([fm_vector,dnn_vector],axis=1)
-        output=self.MLP_layer2(combined_vector)
+        output=tf.nn.sigmoid(fm_part+dnn_part)
 
         result={'output':output}
         return result
@@ -1017,10 +1022,23 @@ if __name__ == '__main__':
     model.summary()
     print(model(input))
     """
+    """
     input = {'item_tag1': tf.constant([0, 1, 2, 3]), 'item_tag2': tf.constant([4, 5, 6, 7]),
              'item_tag3': tf.constant([8, 9, 10, 11]), 'user_tag0': tf.constant([12, 13, 14, 15])}
     input_dic = {}
     layer = ParralledOnnLayer(embedding_dims=8)
+    for feature in layer.feature_names:
+        input_dic[feature] = tf.keras.Input(shape=(1,), name=feature, dtype=tf.int64)
+    output = layer(input_dic)
+    model = tf.keras.Model(input_dic, output)
+    model.summary()
+    print(model(input))
+    """
+    input = {'user_tag0': tf.constant([12, 13, 14, 15]), 'user_tag1': tf.constant([16, 17, 18, 19]),
+             'item_tag1': tf.constant([0, 1, 2, 3]), 'item_tag2': tf.constant([4, 5, 6, 7]),
+             'item_tag3': tf.constant([8, 9, 10, 11])}
+    input_dic = {}
+    layer = DeepFMRankingLayer(embedding_dims=8)
     for feature in layer.feature_names:
         input_dic[feature] = tf.keras.Input(shape=(1,), name=feature, dtype=tf.int64)
     output = layer(input_dic)

@@ -21,40 +21,42 @@
 (16) CCPM  
 (17) FGCNN  
 (18) AFM  
+(19) FiBiNet  
+(20) AutoInt  
 
 # 4.MMOE
-(19) MMOE  
-(20) ESMM  
-(21) PLE  
+(21) MMOE  
+(22) ESMM  
+(23) PLE  
 
 # 5.DIN
-(22) DIN  
-(23) DIEN  
-(24) DSIN
+(24) DIN  
+(25) DIEN  
+(26) DSIN
 
 # 6.MIND
-(25) MIND  
-(26) SDM  
-(27) ComiRec  
+(27) MIND  
+(28) SDM  
+(29) ComiRec  
 
 # 7.SIM
-(28) SIM  
-(29) CAN   
-(30) ETA    
+(30) SIM  
+(31) CAN   
+(32) ETA    
 
 # 8.DMR
-(31) DMR  
-(32) DMT  
-(33) FinalMLP  
-(34) SDIM  
+(33) DMR  
+(34) DMT  
+(35) FinalMLP  
+(36) SDIM  
 
 # 9.ESCM2  
-(35) ESM2  
-(36) ESCM2  
-(37) FDN  
+(37) ESM2  
+(38) ESCM2  
+(39) FDN  
 
 # 10.POSO
-(38) POSO  for MLP/MHA/MMOE  
-(39) PEPNet  
+(40) POSO  for MLP/MHA/MMOE  
+(41) PEPNet  
 
 

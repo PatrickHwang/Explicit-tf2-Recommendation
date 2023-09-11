@@ -405,7 +405,7 @@ class CANLayer(tf.keras.layers.Layer):
         self.dien_layer.trainable = False
 
         self.CoActionUnit_dict = {}
-        # 创建多少个CoActionUnit层，视忽想要如何独立地将特征交互。在一个独立的CoActionUnit层中，MLP embedding是独立的，feed embedding是独立的
+        # 创建多少个CoActionUnit层，视乎想要如何独立地将特征交互。在一个独立的CoActionUnit层中，MLP embedding是独立的，feed embedding是独立的
         # 不独立的特征组合共享一个CoActionUnit层
         # 这里，i_goods_id,i_shop_id,i_cate_id分别使用不同的MLP embedding
         # 为了演示简单，i_goods_id只和visited_goods_ids与user_and_context_categorical_features交叉
