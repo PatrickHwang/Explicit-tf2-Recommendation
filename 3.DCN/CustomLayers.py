@@ -1,4 +1,5 @@
 import tensorflow as tf
+from tensorflow.python.ops.init_ops_v2 import glorot_normal
 from tensorflow.python.ops.math_ops import MatMul
 from tensorflow.python.ops.nn_ops import BiasAdd
 from tensorflow.python.keras import activations, initializers
@@ -85,120 +86,6 @@ class MLPLayer(tf.keras.layers.Layer):
             if is_train and self.is_dropout > 0:
                 _input = Dropout(self.is_dropout)(_input)  # is_dropout是丢弃率，不是通过率
         return _input
-
-
-class FMRankingLayer(tf.keras.layers.Layer):
-    def __init__(self, feature_names=['item_tag1', 'item_tag2', 'item_tag3'], feature_dims=20, embedding_dims=16,
-                 **kwargs):
-        super(FMRankingLayer, self).__init__(**kwargs)
-        self.feature_names = feature_names
-        self.feature_dims = feature_dims
-        self.embedding_dims = embedding_dims
-        self.bias = self.add_weight(name='bias',
-                                    shape=(1,),
-                                    trainable=True)
-        # embedding and w
-        self.embed = tf.keras.layers.Embedding(self.feature_dims,
-                                               self.embedding_dims,
-                                               embeddings_regularizer="l2")
-        self.w = tf.keras.layers.Embedding(self.feature_dims,
-                                           1,
-                                           embeddings_regularizer="l2")
-
-    def build(self, input_shape):
-        # bias
-        self.bias = self.add_weight(name='bias',
-                                    shape=(1,),
-                                    trainable=True)
-        # embedding and w
-        self.embed = tf.keras.layers.Embedding(self.feature_dims,
-                                               self.embedding_dims,
-                                               embeddings_regularizer="l2")
-        self.w = tf.keras.layers.Embedding(self.feature_dims,
-                                           1,
-                                           embeddings_regularizer="l2")
-        self.built = True
-
-    def call(self, inputs):
-        X = []
-        for feature in self.feature_names:
-            X.append(inputs[feature])
-        X = tf.concat(X, axis=1)
-        print(X)
-
-        w_output = self.w(X)
-        emb_output = self.embed(X)
-        print(emb_output.shape)
-
-        first_order = tf.reduce_sum(w_output, axis=1)
-
-        sum_of_square = tf.reduce_sum(tf.square(emb_output), axis=1)
-        square_of_sum = tf.square(tf.reduce_sum(emb_output, axis=1))
-        second_order = 0.5 * tf.reduce_sum(tf.subtract(square_of_sum, sum_of_square), axis=1, keepdims=True)
-
-        output = tf.nn.sigmoid(self.bias + first_order + second_order)
-        result = {'output': output}
-        return result
-
-
-class WideAndDeepRankingLayer(tf.keras.layers.Layer):
-    """
-    mm = ModelManager(layer='wide_and_deep')
-    input = {'user_tag1':tf.constant([12,13,14,15]),'user_tag2':tf.constant([16,17,18,19]),
-             'item_tag1': tf.constant([0, 1, 2,3]), 'item_tag2': tf.constant([4, 5, 6,7]),
-             'item_tag3': tf.constant([8,9,10,11])}
-    print(mm.model(input))
-    """
-
-    def __init__(self,
-                 categorical_features=['uid', 'iid', 'utag1', 'utag2', 'utag3', 'utag4', 'itag1', 'itag2', 'itag3',
-                                       'itag4'],
-                 continuous_features=['itag4_origin', 'itag4_square', 'itag4_cube'], feature_dims=160000,
-                 embedding_dims=16,
-                 mlp_dims=[32, 8], **kwargs):
-        super(WideAndDeepRankingLayer, self).__init__(**kwargs)
-        self.categorical_features = categorical_features
-        self.continuous_features = continuous_features
-        self.feature_dims = feature_dims
-        self.embedding_dims = embedding_dims
-        self.mlp_dims = mlp_dims
-
-    def build(self, input_shape):
-        # embedding and w
-        self.embed = tf.keras.layers.Embedding(self.feature_dims,
-                                               self.embedding_dims,
-                                               embeddings_regularizer="l2")
-
-        self.MLP_layer1 = MLPLayer(units=self.mlp_dims, activation='relu')
-        self.MLP_layer2 = MLPLayer(units=[1], activation='sigmoid')
-        self.built = True
-
-    def call(self, inputs):
-        # 需要有labelencode以前的原始特征值才行，dataset需要另外处理
-        X = []
-        for feature in self.categorical_features:
-            X.append(inputs[feature])
-        X = tf.concat(X, axis=1)
-
-        cont = []
-        for feature in self.continuous_features:
-            cont.append(inputs[feature])
-        cont = tf.concat(cont, axis=1)
-
-        # common input vectors
-        emb_output = self.embed(X)
-
-        # DNN Part
-        dense_embedding = tf.keras.layers.Flatten()(emb_output)
-        dnn_vector = self.MLP_layer1(dense_embedding)
-        # dnn_vector=tf.cast(dnn_vector,dtype=float)
-
-        # output
-        combined_vector = tf.concat([cont, dnn_vector], axis=1)
-        output = self.MLP_layer2(combined_vector)
-
-        result = {'output': output}
-        return result
 
 
 class DenseLayer(tf.keras.layers.Layer):
@@ -511,6 +398,7 @@ class NeuralFactorizationMachineLayer(tf.keras.layers.Layer):
         result = {'output': output}
         return result
 
+
 class DeepCrossingLayer(tf.keras.layers.Layer):
     def __init__(self,categorical_features=['uid', 'iid', 'utag1', 'utag2', 'utag3', 'utag4', 'itag1', 'itag2', 'itag3','itag4'],
                 continuous_features=['itag4_origin', 'itag4_square', 'itag4_cube'], feature_dims=160000,embedding_dims=16,
@@ -553,8 +441,6 @@ class DeepCrossingLayer(tf.keras.layers.Layer):
         return result
 
 
-
-
 class ResLayer(tf.keras.layers.Layer):
     def __init__(self,hidden_units,activation):
         super(ResLayer,self).__init__()
@@ -571,6 +457,7 @@ class ResLayer(tf.keras.layers.Layer):
         x=self.output_layer(x)
         output=x+inputs
         return tf.nn.relu(output)
+
 
 class FNNLayer(tf.keras.layers.Layer):
     '''
@@ -611,6 +498,7 @@ class FNNLayer(tf.keras.layers.Layer):
         result = {'output': output}
         return result
 
+
 class KMaxPool(tf.keras.layers.Layer):
     def __init__(self,k):
         super(KMaxPool,self).__init__()
@@ -628,6 +516,7 @@ class KMaxPool(tf.keras.layers.Layer):
         # 恢复(None,fields_num,ebd_dim,1)
         output=tf.transpose(k_max,[0,3,2,1])
         return output
+
 
 class CCPMBaseLayer(tf.keras.layers.Layer):
     """
@@ -667,6 +556,7 @@ class CCPMBaseLayer(tf.keras.layers.Layer):
             x=self.kmax_layers[i](x)
         output=self.flatten_layer(x)
         return output
+
 
 class CCPMLayer(tf.keras.layers.Layer):
     def __init__(self,categorical_features=['uid', 'iid', 'utag1', 'utag2', 'utag3', 'utag4', 'itag1', 'itag2', 'itag3','itag4'],continuous_features=['itag4_origin', 'itag4_square', 'itag4_cube'],
@@ -708,6 +598,7 @@ class CCPMLayer(tf.keras.layers.Layer):
 
         result = {'output': output}
         return result
+
 
 class FGCNNBaseLayer(tf.keras.layers.Layer):
     def __init__(self,filters=[14,16],kernel_width=[7,7],dnn_maps=[3,3],pooling_width=[2,2]):
@@ -755,6 +646,7 @@ class FGCNNBaseLayer(tf.keras.layers.Layer):
         output=tf.concat(dnn_outputs,axis=1)
         return output
 
+
 class FGCNNLayer(tf.keras.layers.Layer):
     def __init__(self,categorical_features=['uid', 'iid', 'utag1', 'utag2', 'utag3', 'utag4', 'itag1', 'itag2', 'itag3','itag4'],continuous_features=['itag4_origin', 'itag4_square', 'itag4_cube'],
                  feature_dims=150000,embedding_dims=16,
@@ -797,6 +689,7 @@ class FGCNNLayer(tf.keras.layers.Layer):
 
         result = {'output': output}
         return result
+
 
 class InteractionLayer(tf.keras.layers.Layer):
     def __init__(self):
@@ -914,9 +807,9 @@ class FiBiNetLayer(tf.keras.layers.Layer):
         # 没有完全加入wide的部分，也可以考虑加入
         output=self.output_layer(dnn_output)
 
-
         result = {'output': output}
         return result
+
 
 class SENetLayer(tf.keras.layers.Layer):
     def __init__(self,reduction_ratio):
@@ -940,6 +833,7 @@ class SENetLayer(tf.keras.layers.Layer):
         V=tf.multiply(inputs,tf.expand_dims(A,axis=2))
         return V
 
+
 class BilinearInteractionLayer(tf.keras.layers.Layer):
     def __init__(self,bilinear_type='interaction'):
         super(BilinearInteractionLayer,self).__init__()
@@ -958,7 +852,6 @@ class BilinearInteractionLayer(tf.keras.layers.Layer):
             raise NotImplementedError
         super(BilinearInteractionLayer, self).build(input_shape)
 
-
     def call(self,inputs):
         # (None,field_num,embedding_size) -> [n*(None,embedding_size)]
         field_list=tf.split(inputs,self.field_num,axis=1)
@@ -974,6 +867,7 @@ class BilinearInteractionLayer(tf.keras.layers.Layer):
         output=tf.concat(p,axis=1)
 
         return output
+
 
 class TransformerAttentionLayer(tf.keras.layers.Layer):
     def __init__(self,num_heads=2,use_res=True,res_learnable=False,scaling=False):
@@ -997,7 +891,6 @@ class TransformerAttentionLayer(tf.keras.layers.Layer):
         if self.use_res and self.res_learnable:
             self.W_res=self.add_weight(name='res', shape=[self.embedding_dim, self.embedding_dim], dtype=tf.float32,
                                        initializer=tf.keras.initializers.TruncatedNormal())
-
 
     def call(self,inputs):
         # (None,field_num,embedding_size) -> 不变
@@ -1032,6 +925,7 @@ class TransformerAttentionLayer(tf.keras.layers.Layer):
 
         result=tf.nn.relu(result)
         return result
+
 
 class AutoIntLayer(tf.keras.layers.Layer):
     """
