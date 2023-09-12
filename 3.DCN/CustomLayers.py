@@ -88,6 +88,66 @@ class MLPLayer(tf.keras.layers.Layer):
         return _input
 
 
+class WideAndDeepRankingLayer(tf.keras.layers.Layer):
+    """
+    mm = ModelManager(layer='wide_and_deep')
+    input = {'user_tag1':tf.constant([12,13,14,15]),'user_tag2':tf.constant([16,17,18,19]),
+             'item_tag1': tf.constant([0, 1, 2,3]), 'item_tag2': tf.constant([4, 5, 6,7]),
+             'item_tag3': tf.constant([8,9,10,11])}
+    print(mm.model(input))
+    """
+
+    def __init__(self,
+                 categorical_features=['uid', 'iid', 'utag1', 'utag2', 'utag3', 'utag4', 'itag1', 'itag2', 'itag3',
+                                       'itag4'],
+                 continuous_features=['itag4_origin', 'itag4_square', 'itag4_cube'], feature_dims=160000,
+                 embedding_dims=16,
+                 mlp_dims=[32, 8], **kwargs):
+        super(WideAndDeepRankingLayer, self).__init__(**kwargs)
+        self.categorical_features = categorical_features
+        self.continuous_features = continuous_features
+        self.feature_dims = feature_dims
+        self.embedding_dims = embedding_dims
+        self.mlp_dims = mlp_dims
+
+    def build(self, input_shape):
+        # embedding and w
+        self.embed = tf.keras.layers.Embedding(self.feature_dims,
+                                               self.embedding_dims,
+                                               embeddings_regularizer="l2")
+
+        self.MLP_layer1 = MLPLayer(units=self.mlp_dims, activation='relu')
+        self.MLP_layer2 = MLPLayer(units=[1], activation='sigmoid')
+        self.built = True
+
+    def call(self, inputs):
+        # 需要有labelencode以前的原始特征值才行，dataset需要另外处理
+        X = []
+        for feature in self.categorical_features:
+            X.append(inputs[feature])
+        X = tf.concat(X, axis=1)
+
+        cont = []
+        for feature in self.continuous_features:
+            cont.append(inputs[feature])
+        cont = tf.concat(cont, axis=1)
+
+        # common input vectors
+        emb_output = self.embed(X)
+
+        # DNN Part
+        dense_embedding = tf.keras.layers.Flatten()(emb_output)
+        dnn_vector = self.MLP_layer1(dense_embedding)
+        # dnn_vector=tf.cast(dnn_vector,dtype=float)
+
+        # output
+        combined_vector = tf.concat([cont, dnn_vector], axis=1)
+        output = self.MLP_layer2(combined_vector)
+
+        result = {'output': output}
+        return result
+
+
 class DenseLayer(tf.keras.layers.Layer):
     """使用Dense直接实现MLP"""
 
@@ -177,12 +237,18 @@ class DeepCrossNetworkLayer(tf.keras.layers.Layer):
     def call(self, inputs):
         X = []
         for feature in self.categorical_features:
-            X.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X.append(feature_tensor)
         X = tf.concat(X, axis=1)
 
         cont = []
         for feature in self.continuous_features:
-            cont.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            cont.append(feature_tensor)
         X_cont = tf.concat(cont, axis=1)
 
         X_emb = self.embedding_layer(X)
@@ -250,7 +316,6 @@ class XDeepFMRankingLayer(tf.keras.layers.Layer):
                  'itag4_cube': tf.constant([-3.8, -19.6, 4.2])}
         print(mm.model(input))
         """
-
     def __init__(self,
                  categorical_features=['uid', 'iid', 'utag1', 'utag2', 'utag3', 'utag4', 'itag1', 'itag2', 'itag3',
                                        'itag4'],
@@ -273,12 +338,18 @@ class XDeepFMRankingLayer(tf.keras.layers.Layer):
     def call(self, inputs):
         cate = []
         for feature in self.categorical_features:
-            cate.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            cate.append(feature_tensor)
         X_cate = tf.concat(cate, axis=1)
 
         cont = []
         for feature in self.continuous_features:
-            cont.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            cont.append(feature_tensor)
         X_cont = tf.concat(cont, axis=1)
 
         # linear_part
@@ -344,6 +415,37 @@ class CINLayer(tf.keras.layers.Layer):
         return output
 
 
+class NewCINLayer(tf.keras.layers.Layer):
+    """
+    input = tf.constant(np.arange(24).reshape(2, 3, 4), dtype=float)
+    cin_layer = CINLayer([2, 4])
+    print(cin_layer(input))
+    """
+    def __init__(self, cin_size=[8, 16]):
+        super(NewCINLayer, self).__init__()
+        self.cin_size = cin_size
+
+    def build(self, input_shape):
+        self.field_num = [input_shape[1]] + self.cin_size
+        self.cin_W=[Dense(unit) for unit in self.field_num[1:]]  # input: field_num[0]*field_num[i] output:field_num[i+1]
+
+    def call(self, inputs):
+        embedding_dim = tf.shape(inputs)[-1]
+        batch_size=tf.shape(inputs)[0]
+        res_list = [inputs]
+        X0 = inputs  # (batch_size,field_num[0],embedding_dim)
+        for i, size in enumerate(self.field_num[1:]):
+            Xi = res_list[-1]     # (batch_size,field_num[i-1],embedding_dim)
+            X = tf.reshape(tf.einsum('bme,bne->bmne',X0,Xi),(batch_size,embedding_dim,tf.shape(Xi)[1]*tf.shape(X0)[1]))
+            X = self.cin_W[i](X)   # (batch_size,embedding_dim,field_num[i])
+            X = tf.transpose(X,[0,2,1]) # (batch_size,field_num[i],embedding_dim)
+            res_list.append(X)
+        res_list = res_list[:]  # 保留原始输入
+        res = tf.concat(res_list, axis=1)  # (None,sum(self.field_num[:]),embedding_dim)
+        output = tf.reduce_sum(res, axis=-1)  # (None,sum(self.field_num[:]))
+        return output
+
+
 class NeuralFactorizationMachineLayer(tf.keras.layers.Layer):
     def __init__(self, categorical_features=['uid', 'iid', 'utag1', 'utag2', 'utag3', 'utag4', 'itag1', 'itag2', 'itag3','itag4'],
                 continuous_features=['itag4_origin', 'itag4_square', 'itag4_cube'], feature_dims=160000,embedding_dims=16,
@@ -374,11 +476,17 @@ class NeuralFactorizationMachineLayer(tf.keras.layers.Layer):
         X_cont=[]
         X_cate = []
         for feature in self.continuous_features:
-            X_cont.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X_cont.append(feature_tensor)
         X_cont = tf.concat(X_cont, axis=1)
 
         for feature in self.categorical_features:
-            X_cate.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X_cate.append(feature_tensor)
         X_emb = tf.concat(X_cate, axis=1)
 
         # w_output = self.w(X_cate)     暂时不使用一阶特征
@@ -424,11 +532,17 @@ class DeepCrossingLayer(tf.keras.layers.Layer):
         X_cont = []
         X_cate = []
         for feature in self.continuous_features:
-            X_cont.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X_cont.append(feature_tensor)
         X_cont = tf.concat(X_cont, axis=1)
 
         for feature in self.categorical_features:
-            X_cate.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X_cate.append(feature_tensor)
         X_emb = tf.concat(X_cate, axis=1)
 
         emb_output = tf.keras.layers.Flatten()(self.embed(X_emb))
@@ -487,7 +601,10 @@ class FNNLayer(tf.keras.layers.Layer):
     def call(self,inputs):
         X_cate=[]
         for feature in self.categorical_features:
-            X_cate.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X_cate.append(feature_tensor)
         lookup_indexes = tf.concat(X_cate, axis=1)
         X_emb=tf.nn.embedding_lookup(self.embedding_table,lookup_indexes)
 
@@ -583,11 +700,17 @@ class CCPMLayer(tf.keras.layers.Layer):
         X_cont = []
         X_cate = []
         for feature in self.continuous_features:
-            X_cont.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X_cont.append(feature_tensor)
         X_cont = tf.concat(X_cont, axis=1)
 
         for feature in self.categorical_features:
-            X_cate.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X_cate.append(feature_tensor)
         X_emb = tf.concat(X_cate, axis=1)
         X_emb=self.embedding_layer(X_emb)
 
@@ -672,11 +795,17 @@ class FGCNNLayer(tf.keras.layers.Layer):
         X_cont = []
         X_cate = []
         for feature in self.continuous_features:
-            X_cont.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X_cont.append(feature_tensor)
         X_cont = tf.concat(X_cont, axis=1)
 
         for feature in self.categorical_features:
-            X_cate.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X_cate.append(feature_tensor)
         X_emb = tf.concat(X_cate, axis=1)
         X_emb = self.embedding_layer(X_emb)
 
@@ -739,7 +868,10 @@ class AttentionalFactorizationMachine(tf.keras.layers.Layer):
     def call(self,inputs):
         X = []
         for feature in self.categorical_features:
-            X.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            X.append(feature_tensor)
         X = tf.concat(X, axis=1)
         emb_output = self.embedding_layer(X)
 
@@ -786,12 +918,18 @@ class FiBiNetLayer(tf.keras.layers.Layer):
     def call(self, inputs):
         cate = []
         for feature in self.categorical_features:
-            cate.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            cate.append(feature_tensor)
         X_cate = tf.concat(cate, axis=1)
 
         cont = []
         for feature in self.continuous_features:
-            cont.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            cont.append(feature_tensor)
         X_cont = tf.concat(cont, axis=1)
 
 
@@ -961,12 +1099,18 @@ class AutoIntLayer(tf.keras.layers.Layer):
     def call(self, inputs):
         cate = []
         for feature in self.categorical_features:
-            cate.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            cate.append(feature_tensor)
         X_cate = tf.concat(cate, axis=1)
 
         cont = []
         for feature in self.continuous_features:
-            cont.append(inputs[feature])
+            feature_tensor = inputs[feature]
+            if len(feature_tensor.shape) == 1:
+                feature_tensor = tf.expand_dims(feature_tensor, axis=1)
+            cont.append(feature_tensor)
         X_cont = tf.concat(cont, axis=1)
 
 
@@ -994,7 +1138,7 @@ class AutoIntLayer(tf.keras.layers.Layer):
 
 
 if __name__ == '__main__':
-    input = tf.random.normal((2,3,8))
-    layer=AttentionLayer(3)
-    print(layer(input).shape)
+    input = tf.constant(np.arange(24).reshape(2, 3, 4), dtype=float)
+    cin_layer = NewCINLayer([2, 4])
+    print(cin_layer(input))
 
