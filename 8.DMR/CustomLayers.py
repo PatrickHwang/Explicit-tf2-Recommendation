@@ -398,15 +398,17 @@ class FeatureSelectionLayer(tf.keras.layers.Layer):
             fs1_units = [64, 160]
         self.fs1_embedding = tf.keras.layers.Embedding(fs1_feature_dims, fs1_emd_dim)
         self.fs2_embedding = tf.keras.layers.Embedding(fs2_feature_dims, fs2_emd_dim)
-        self.mlp_gate1 = make_mlp_layer(fs1_units, fs1_activation, fs1_norm)
-        self.mlp_gate2 = make_mlp_layer(fs2_units, fs2_activation, fs2_norm)
+        self.mlp_gate1_hidden = make_mlp_layer(fs1_units[:-1], fs1_activation, fs1_norm)
+        self.mlp_gate2_hidden = make_mlp_layer(fs2_units[:-1], fs2_activation, fs2_norm)
+        self.mlp_gate1_output = make_mlp_layer(fs1_units[-1:], 'sigmoid', fs1_norm)
+        self.mlp_gate2_output = make_mlp_layer(fs2_units[-1:], 'sigmoid', fs2_norm)
 
     def call(self, inputs):
         X_shared,X_item,X_user=inputs
-        X_item=self.mlp_gate1(tf.keras.layers.Flatten()(self.fs1_embedding(X_item)))
-        X_user=self.mlp_gate2(tf.keras.layers.Flatten()(self.fs2_embedding(X_user)))
-        X_item=tf.nn.sigmoid(X_item)*2
-        X_user = tf.nn.sigmoid(X_user) * 2
+        X_item=self.mlp_gate1_hidden(tf.keras.layers.Flatten()(self.fs1_embedding(X_item)))
+        X_user=self.mlp_gate2_hidden(tf.keras.layers.Flatten()(self.fs2_embedding(X_user)))
+        X_item=self.mlp_gate1_output(X_item)*2
+        X_user = self.mlp_gate2_output(X_user) * 2
         out1=X_item*X_shared
         out2=X_user*X_shared
         return out1,out2
@@ -1002,6 +1004,7 @@ if __name__ == '__main__':
     model.summary()
     print(model(inputs))
     """
+    """
     inputs = {
         'uid': tf.constant([0, 1, 2]),
         'utag1': tf.constant([6, 7, 8]),
@@ -1045,6 +1048,23 @@ if __name__ == '__main__':
         input_dict[feature] = tf.keras.Input(shape=(longterm_max_length,), name=feature, dtype=tf.int64)
     for feature in layer.item_categorical_features:
         input_dict[feature] = tf.keras.Input(shape=(batch_candidates_num,), name=feature, dtype=tf.int64)
+    output = layer(input_dict)
+    model = tf.keras.Model(input_dict, output)
+    model.summary()
+    print(model(inputs))
+    """
+    inputs = {'uid': tf.constant([0, 1, 2]), 'iid': tf.constant([3, 4, 5]),
+              'utag1': tf.constant([6, 7, 8]), 'utag2': tf.constant([9, 10, 11]),
+              'utag3': tf.constant([12, 13, 14]), 'utag4': tf.constant([15, 16, 17]),
+              'itag1': tf.constant([18, 19, 20]), 'itag2': tf.constant([21, 22, 23]),
+              'itag3': tf.constant([24, 25, 26]), 'itag4': tf.constant([27, 28, 29])}
+    layer = FinalMLPLayer()
+    set_custom_initialization(layer)
+    print(layer(inputs))
+    print('****************')
+    input_dict = {}
+    for feature in layer.user_features + layer.item_features:
+        input_dict[feature] = tf.keras.Input(shape=(1,), name=feature, dtype=tf.int64)
     output = layer(input_dict)
     model = tf.keras.Model(input_dict, output)
     model.summary()

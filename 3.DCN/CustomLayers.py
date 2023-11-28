@@ -1,3 +1,5 @@
+import itertools
+
 import tensorflow as tf
 from tensorflow.python.ops.init_ops_v2 import glorot_normal
 from tensorflow.python.ops.math_ops import MatMul
@@ -950,7 +952,7 @@ class FiBiNetLayer(tf.keras.layers.Layer):
 
 
 class SENetLayer(tf.keras.layers.Layer):
-    def __init__(self,reduction_ratio):
+    def __init__(self,reduction_ratio=3):
         super(SENetLayer,self).__init__()
         self.reduction_ratio=reduction_ratio
 
@@ -1138,7 +1140,7 @@ class AutoIntLayer(tf.keras.layers.Layer):
 
 
 if __name__ == '__main__':
-    input = tf.constant(np.arange(24).reshape(2, 3, 4), dtype=float)
-    cin_layer = NewCINLayer([2, 4])
+    input = tf.constant(np.arange(72).reshape(3, 6, 4), dtype=float)
+    cin_layer = BilinearInteractionLayer(bilinear_type='each')
     print(cin_layer(input))
 

@@ -88,13 +88,13 @@ class MultiInterestExtractorLayer(tf.keras.layers.Layer):
         # S是连接输入的矩阵，把输入维度转换成胶囊维度
         # 在论文中，每个胶囊的S是共享的
         # caps = tf.einsum('bkl,bld->bkd', W, behaviors)  # caps: (batch_size, capsules_num, capsule_dims)
-        # 这一步实现了capsules_num的共享，否则应该是bkl,bkld->bkd
+        # k是capsules_num维，这一步实现了capsules_num的共享，否则应该是bkl,bkld->bkd
+
+        # B是要经过softmax加权sequence_length的参数矩阵，而且它是胶囊间独立的
+        # W是和B同形状的，它把behavior按sequence_length维度加权了,结果就是squash前的caps
         self.B = self.add_weight(shape=(self.capsules_num, input_shape[0][1]),
                                  initializer='random_normal',
                                  trainable=False)
-        # B是要经过softmax加权sequence_length的参数矩阵，而且它是胶囊间独立的
-        # caps = tf.einsum('bkl,bld->bkd', W, behaviors)  # caps: (batch_size, capsules_num, capsule_dims)
-        # W是和B同形状的，它把hehavior按sequence_length维度加权了,结果就是squash前的caps
 
         # B += tf.einsum('bkd,bld->bkl', caps, behaviors)  # B: (batch_size, capsules_num, sequence_length)
         # behaviors: (batch_size, sequence_length, capsule_dims)
@@ -595,6 +595,7 @@ class ComiRecDynamicRoutingLayer(tf.keras.layers.Layer):
 
 
 class ComiRecSelfAttentiveLayer(tf.keras.layers.Layer):
+
     """
     layer=ComiRecSelfAttentiveLayer(4,6)
     batch_size,sequence_length,embedding_dims=3,5,8
