@@ -963,6 +963,219 @@ class ComiRecLayer(tf.keras.layers.Layer):
         return result
 
 
+class SINELayer(tf.keras.layers.Layer):
+    def __init__(self,
+                 item_categorical_features=['label_goods_ids', 'label_shop_ids', 'label_cate_ids'],
+                 behavior_series_features=['visited_goods_ids', 'visited_shop_ids', 'visited_cate_ids'],
+                 feature_dims=160000, embedding_dims=16, padding_index=0, L=100, K=5, tau=0.1):
+        super(SINELayer, self).__init__()
+        assert len(item_categorical_features) == len(behavior_series_features)
+
+        self.item_categorical_features = item_categorical_features
+        self.behavior_series_features = behavior_series_features
+        self.feature_dims = feature_dims
+        self.embedding_dims = embedding_dims
+        self.L = L
+        self.K = K
+        self.D = len(item_categorical_features) * embedding_dims  # D is actually 3 * embedding_dim
+        self.tau = tau
+
+        self.embed = tf.keras.layers.Embedding(self.feature_dims, self.embedding_dims)
+
+        # Defining the interest pool (L*D) and weights W1 (D*D) and W2 (D) as trainable parameters
+        self.interest_pool = self.add_weight(shape=(self.L, self.D), initializer='random_normal', trainable=True)
+        self.W1 = self.add_weight(shape=(self.D, self.D), initializer='random_normal', trainable=True)
+        self.W2 = self.add_weight(shape=(self.D,), initializer='random_normal', trainable=True)
+        self.Wk1 = self.add_weight(shape=(self.L, self.D, self.D), initializer='random_normal', trainable=True)
+        self.Wk2 = self.add_weight(shape=(self.L, self.D), initializer='random_normal', trainable=True)
+        # 添加 W3 和 W4 的初始化
+        self.W3 = self.add_weight(shape=(self.D, self.D), initializer='random_normal', trainable=True)
+        self.W4 = self.add_weight(shape=(self.D,), initializer='random_normal', trainable=True)
+
+        self.padding_index = padding_index
+
+    def build(self, input_shape):
+        super().build(input_shape)
+
+    def generate_user_interest(self, inputs):
+        sequence_mask = inputs[self.behavior_series_features[0]] == self.padding_index
+
+        X_series = tf.stack([inputs[feature] for feature in self.behavior_series_features],
+                            axis=2)  # (batch_size, seq_length, feature_cols)
+        batch_size, seq_length, feature_cols = X_series.shape
+        X_series = tf.reshape(X_series, [-1, feature_cols * seq_length])  # (batch_size,feature_cols*seq_length)
+        X_series = self.embed(X_series)  # (batch_size,feature_cols*seq_length,emb_dim)
+        X_series = tf.reshape(X_series, [-1, seq_length,
+                                         feature_cols * self.embedding_dims])  # (batch_size,seq_length,feature_cols*emb_dim)
+
+        # Cu (batch_size,K,D)
+        activated_interests,top_k_indices = self.activate_interest(X_series,sequence_mask)
+        # Pu (batch_size,n,K) n即sequence_length
+        intention_distribution = self.compute_intention_distribution(X_series, activated_interests)
+        # (batch_size,K,n)
+        weight_distribution = self.compute_weight_distribution(X_series, top_k_indices)
+        # (batch_size,K,D)
+        top_k_user_interest=self.compute_interest_vectors(intention_distribution, weight_distribution, X_series)
+
+        final_interest=self.compute_final_user_interest(intention_distribution, activated_interests, top_k_user_interest)
+
+        return final_interest
+
+    def activate_interest(self, X_series, sequence_mask):
+        # X_series: (batch_size, seq_length, D)
+        # Calculate self-attention weights
+        mask = tf.cast(sequence_mask, tf.float32)
+        attention_score = tf.nn.tanh(tf.einsum('bnd,de->bne', X_series, self.W1))
+        attention_score = tf.einsum('bne,e->bn', attention_score, self.W2)
+        attention_score_masked = attention_score + (mask * -1e9)
+        attention_weights = tf.nn.softmax(attention_score_masked, axis=1)
+
+        # Apply attention weights to the behavior sequences
+        weighted_behavior = tf.einsum('bn,bnd->bd', attention_weights, X_series)
+
+        # Calculate similarity with interest pool
+        # (batch_size,L)
+        similarity = tf.matmul(weighted_behavior, self.interest_pool, transpose_b=True)
+
+        # Select top K interests
+        top_k_indices = tf.math.top_k(similarity, self.K).indices
+        # (batch_size,K,D)
+        top_k_interests = tf.gather(self.interest_pool, top_k_indices, batch_dims=0)
+
+        # Apply sigmoid to the top K similarities
+        # (batch_size,K)
+        top_k_similarities = tf.gather(similarity, top_k_indices, batch_dims=1)
+        top_k_similarities = tf.nn.sigmoid(top_k_similarities)
+
+        # Multiply the interests by their corresponding sigmoid scores
+        activated_interests = top_k_interests * tf.expand_dims(top_k_similarities, -1)
+
+        return activated_interests,top_k_indices
+
+    def compute_intention_distribution(self, X_series, activated_interests):
+        # X_series: (batch_size, seq_length, D)
+        # activated_interests: (batch_size, K, D)
+
+        # 使用 LayerNorm 处理 X_series 和 activated_interests
+        activated_interests_norm = tf.keras.layers.LayerNormalization(axis=-1)(activated_interests)
+
+        # 计算 X_series 与 W3 的乘积
+        X_series_transformed = tf.einsum('bnd,de->bne', X_series, self.W3)
+        X_series_transformed_norm=tf.keras.layers.LayerNormalization(axis=-1)(X_series_transformed)
+
+        # 计算 X_series_transformed 与 activated_interests_norm 的点积
+        intention_scores = tf.einsum('bnd,bkd->bnk', X_series_transformed_norm, activated_interests_norm)
+
+        # 对每一行应用 softmax 运算
+        intention_distribution = tf.nn.softmax(intention_scores, axis=-1)
+
+        # (batch_size,sequence_length,K)
+        return intention_distribution
+
+    def compute_weight_distribution(self, X_series, top_k_indices):
+        # X_series: (batch_size, seq_length, D)
+        # top_k_indices: (batch_size, K)
+
+        # 挑选出top_k_indices对应的权重矩阵
+        Wk1_selected = tf.gather(self.Wk1, top_k_indices, batch_dims=0)
+        Wk2_selected = tf.gather(self.Wk2, top_k_indices, batch_dims=0)
+
+        # 计算每个兴趣的权重分配
+        X_series_transformed = tf.einsum('bnd,bkde->bnke', X_series, Wk1_selected)
+        tanh_result = tf.nn.tanh(X_series_transformed)
+        attention_score = tf.einsum('bnkd,bkd->bkn', tanh_result, Wk2_selected)
+
+        # 计算权重分配矩阵
+        weight_distribution = tf.nn.softmax(attention_score, axis=-1)
+
+        return weight_distribution
+
+    def compute_interest_vectors(self, intention_distribution, weight_distribution, X_series):
+        # intention_distribution: (batch_size, seq_length, K)
+        # weight_distribution: (batch_size, K, seq_length)
+        # X_series: (batch_size, seq_length, D)
+
+        # 先转置权重分配矩阵以匹配意图分配矩阵的形状
+        weight_distribution_transposed = tf.transpose(weight_distribution, perm=[0, 2, 1])
+
+        # 计算兴趣向量
+        interest_vectors = tf.einsum('bnk,bnd->bkd', intention_distribution * weight_distribution_transposed, X_series)
+
+        # 应用层归一化
+        interest_vectors_normalized = tf.keras.layers.LayerNormalization(axis=-1)(interest_vectors)
+
+        return interest_vectors_normalized
+
+    def compute_final_user_interest(self, intention_distribution, activated_interests, top_k_user_interest):
+        # P^u intention_distribution: (batch_size, n, K)
+        # C^u activated_interests: (batch_size, K, D)
+        # top_k_user_interest: (batch_size, K, D)
+
+        # 计算 X^u_hat
+        Xu_hat = tf.einsum('bnk,bkd->bnd', intention_distribution, activated_interests)
+
+        # 计算 C^u_ap_hat，注意 W4 现在是一个向量
+        tanh_XuW3 = tf.tanh(tf.einsum('bnd,dm->bnm', Xu_hat, self.W3))
+        softmax_XuW3W4 = tf.nn.softmax(tf.einsum('bnd,d->bn', tanh_XuW3, self.W4), axis=-1)
+        Cap_u_hat = tf.einsum('bn,bnd->bd', softmax_XuW3W4, Xu_hat)
+        Cap_u_hat = tf.keras.layers.LayerNormalization(axis=-1)(Cap_u_hat)
+
+        # 计算 e^u_k
+        eu_k = tf.einsum('bd,bkd->bk', Cap_u_hat, top_k_user_interest) / self.tau
+        eu_k = tf.nn.softmax(eu_k, axis=1)
+
+        # 计算最终的用户兴趣表示 v^u
+        final_interest = tf.einsum('bk,bkd->bd', eu_k, top_k_user_interest)
+
+        return final_interest
+
+    @staticmethod
+    def compute_main_loss(inner_product):
+        batch_size, num_samples = tf.shape(inner_product)[0], tf.shape(inner_product)[1]
+        # 创建标签，第一个位置为1，其余位置为0
+        labels = tf.concat([tf.ones((batch_size, 1)), tf.zeros((batch_size, num_samples - 1))], axis=1)
+
+        # 计算 softmax cross entropy loss
+        loss = tf.nn.softmax_cross_entropy_with_logits(labels=labels, logits=inner_product)
+
+        return loss
+
+    def compute_auxiliary_loss(self):
+        # 计算兴趣池的均值
+        C_mean = tf.reduce_mean(self.interest_pool, axis=0, keepdims=True)
+
+        # 计算协方差矩阵
+        interest_pool_centered = self.interest_pool - C_mean
+        covariance_matrix = tf.matmul(interest_pool_centered, interest_pool_centered, transpose_b=True)
+
+        # 计算协方差矩阵的L2范数，但去除对角线元素
+        covariance_norm = tf.norm(covariance_matrix - tf.linalg.diag(tf.linalg.diag_part(covariance_matrix)), ord='fro',
+                                  axis=[-2, -1])
+
+        # 计算正则化损失
+        auxiliary_loss = 0.5 * tf.square(covariance_norm)
+        return auxiliary_loss
+
+
+    def call(self, inputs):
+        user_interest = self.generate_user_interest(inputs)  # (batch_size,D)
+
+        X_item = []
+        for feature in self.item_categorical_features:
+            # (batch_size,num_samples)
+            X_item.append(inputs[feature])
+        X_item = tf.stack(X_item, axis=2)
+        X_item = self.embed(X_item)
+        # X_item:(batch_size,num_samples,embedding_dim)
+        X_item = tf.reshape(X_item, [-1, X_item.shape[1], X_item.shape[2] * X_item.shape[3]])
+        # user_interest:(batch_size,embedding_dim)
+        inner_product = tf.einsum('bne,be->bn',X_item,user_interest)
+        main_loss = self.compute_main_loss(inner_product)
+        aux_loss=self.compute_auxiliary_loss()
+        result = {'user_interest': user_interest, 'main_loss': main_loss,'aux_loss':aux_loss}
+        return result
+
+
 if __name__ == '__main__':
     """
     inputs = {
@@ -1116,6 +1329,7 @@ if __name__ == '__main__':
     model.summary()
     print(model(inputs))
     """
+    """
     sequence_lengths = tf.constant([7, 8, 9])  # 有效长度
 
     # 创建一个掩码矩阵，大小为最大长度*最大长度
@@ -1136,4 +1350,29 @@ if __name__ == '__main__':
     attention_mask = tf.cast(attention_mask, dtype=tf.bool)
 
     print(attention_mask)
+    """
+    inputs = {
+        'visited_goods_ids': tf.constant([[30, 31, 32, 70, 71, 72, 73, 0, 0, 0], [33, 34, 35, 36, 81, 82, 83, 84, 0, 0],
+                                          [37, 38, 39, 40, 41, 91, 92, 93, 94, 0]]),
+        'visited_shop_ids': tf.constant([[42, 43, 44, 70, 71, 72, 73, 0, 0, 0], [45, 46, 47, 48, 81, 82, 83, 84, 0, 0],
+                                         [49, 50, 51, 52, 53, 91, 92, 93, 94, 0]]),
+        'visited_cate_ids': tf.constant([[54, 55, 56, 70, 71, 72, 73, 0, 0, 0], [57, 58, 59, 60, 81, 82, 83, 84, 0, 0],
+                                         [61, 62, 63, 64, 65, 91, 92, 93, 94, 0]]),
+        'label_cate_ids': tf.constant([[11, 12, 13, 14, 15, 16], [17, 18, 19, 20, 21, 22], [23, 24, 25, 26, 27, 28]]),
+        'label_goods_ids': tf.constant([[31, 32, 33, 34, 35, 36], [37, 38, 39, 40, 41, 42], [43, 44, 45, 46, 47, 48]]),
+        'label_shop_ids': tf.constant([[51, 52, 53, 54, 55, 56], [57, 58, 59, 60, 61, 62], [63, 64, 65, 66, 67, 68]])
+        # 训练和验证时，采用sampled_softmax,约定生成数据时，每一行总是第一个样本为正，其余样本为负，不需要再单独传label字段
+        # 预测推理时，不需要有候选商品侧信息，所以也不存在标签
+    }
+    layer = SINELayer(embedding_dims=8)
+    input_dic = {}
+    max_length = 10
+    for feature in layer.item_categorical_features:
+        input_dic[feature] = tf.keras.Input(shape=(1,), name=feature, dtype=tf.int64)
+    for feature in layer.behavior_series_features:
+        input_dic[feature] = tf.keras.Input(shape=(max_length,), name=feature, dtype=tf.int64)
+    output = layer(input_dic)
+    model = tf.keras.Model(input_dic, output)
+    model.summary()
+    print(model(inputs))
 

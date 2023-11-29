@@ -38,25 +38,26 @@
 (27) MIND  
 (28) SDM  
 (29) ComiRec  
+(30) SINE
 
 # 7.SIM
-(30) SIM  
-(31) CAN   
-(32) ETA    
+(31) SIM  
+(32) CAN   
+(33) ETA    
 
 # 8.DMR
-(33) DMR  
-(34) DMT  
-(35) FinalMLP  
-(36) SDIM  
+(34) DMR  
+(35) DMT  
+(36) FinalMLP  
+(37) SDIM  
 
 # 9.ESCM2  
-(37) ESM2  
-(38) ESCM2  
-(39) FDN  
+(38) ESM2  
+(39) ESCM2  
+(40) FDN  
 
 # 10.POSO
-(40) POSO  for MLP/MHA/MMOE  
-(41) PEPNet  
+(41) POSO  for MLP/MHA/MMOE  
+(42) PEPNet  
 
 
