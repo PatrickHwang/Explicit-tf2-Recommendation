@@ -38,7 +38,7 @@
 (27) MIND  
 (28) SDM  
 (29) ComiRec  
-(30) SINE
+(30) SINE  
 
 # 7.SIM
 (31) SIM  
@@ -60,4 +60,7 @@
 (41) POSO  for MLP/MHA/MMOE  
 (42) PEPNet  
 
-
+# 11.Fibinet++
+(43) Fibinet++  
+(44) MaskNet  
+(45) ContextNet  
